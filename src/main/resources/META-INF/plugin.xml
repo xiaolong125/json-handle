@@ -1,0 +1,25 @@
+<idea-plugin>
+    <id>io.github.jsonhandle.studio</id>
+    <name>JSON Handle</name>
+    <vendor>JSON Handle</vendor>
+    <version>0.1.1</version>
+    <idea-version since-build="261" until-build="261.*"/>
+    <depends>com.intellij.modules.platform</depends>
+    <description><![CDATA[
+        Browse and edit JSON in a live tree, format or minify it, and convert Unicode, Base64, and URL components.
+    ]]></description>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="JSON Handle" anchor="right" canCloseContents="true"
+                    factoryClass="io.github.jsonhandle.JsonToolWindowFactory"/>
+    </extensions>
+
+    <actions>
+        <action id="JsonHandle.OpenInToolWindow"
+                class="io.github.jsonhandle.OpenJsonAction"
+                text="Open in JSON Handle"
+                description="Open selected text or the current JSON file in a JSON Handle tab">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

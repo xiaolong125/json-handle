@@ -1,0 +1,43 @@
+plugins {
+    id 'java'
+}
+
+version = '0.1.1'
+
+def studioHome = providers.gradleProperty('studioHome')
+    .orElse(providers.environmentVariable('ANDROID_STUDIO_HOME'))
+    .orElse('/Applications/Android Studio.app/Contents')
+def studioLibraries = fileTree(studioHome.map { file(it + '/lib') }) {
+    include '*.jar'
+}
+
+dependencies {
+    compileOnly studioLibraries
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.named('compileJava') {
+    doFirst {
+        if (!file(studioHome.get() + '/lib/app.jar').isFile()) {
+            throw new GradleException('Set -PstudioHome to the Android Studio installation directory (Contents on macOS).')
+        }
+    }
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+tasks.register('buildPlugin', Zip) {
+    dependsOn jar
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    into('json-handle/lib') {
+        from(tasks.named('jar'))
+    }
+}
+
+tasks.named('assemble') {
+    dependsOn 'buildPlugin'
+}
