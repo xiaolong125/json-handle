@@ -30,6 +30,10 @@ final class JsonDocument {
             this.value = value;
             this.arrayItem = arrayItem;
         }
+
+        boolean hasKey() {
+            return name != null && !arrayItem;
+        }
     }
 
     record Value(Kind kind, String token, List<Entry> children) {

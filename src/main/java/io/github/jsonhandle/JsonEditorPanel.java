@@ -1,14 +1,20 @@
 package io.github.jsonhandle;
 
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.actionSystem.CustomShortcutSet;
+import com.intellij.openapi.actionSystem.KeyboardShortcut;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.editor.colors.EditorFontType;
+import com.intellij.openapi.ide.CopyPasteManager;
+import com.intellij.openapi.project.DumbAwareAction;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.ui.ColoredTreeCellRenderer;
 import com.intellij.ui.DocumentAdapter;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.OnePixelSplitter;
+import com.intellij.ui.SearchTextField;
 import com.intellij.ui.SimpleTextAttributes;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
@@ -22,18 +28,30 @@ import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JPanel;
 import javax.swing.JTree;
+import javax.swing.KeyStroke;
 import javax.swing.Timer;
+import javax.swing.TransferHandler;
 import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.TreeModelListener;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DefaultHighlighter;
 import javax.swing.tree.TreeModel;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.Transferable;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 final class JsonEditorPanel extends JPanel implements Disposable {
+    private static final Logger LOG = Logger.getInstance(JsonEditorPanel.class);
     private static final SimpleTextAttributes FIELD_NAME = new SimpleTextAttributes(
         SimpleTextAttributes.STYLE_BOLD, new JBColor(0x44AA00, 0x91CD65));
     private static final SimpleTextAttributes ARRAY_NAME = new SimpleTextAttributes(
@@ -50,15 +68,26 @@ final class JsonEditorPanel extends JPanel implements Disposable {
         SimpleTextAttributes.STYLE_PLAIN, new JBColor(0x0099CC, 0x62C9F2));
     private static final SimpleTextAttributes NULL_VALUE = new SimpleTextAttributes(
         SimpleTextAttributes.STYLE_PLAIN, new JBColor(0xAAAA00, 0xD5D464));
+    private static final DefaultHighlighter.DefaultHighlightPainter MATCH_PAINTER =
+        new DefaultHighlighter.DefaultHighlightPainter(new JBColor(0xFFEB95, 0x695221));
+    private static final DefaultHighlighter.DefaultHighlightPainter ACTIVE_MATCH_PAINTER =
+        new DefaultHighlighter.DefaultHighlightPainter(new JBColor(0xFF9C9C, 0x962E36));
 
     private final Project project;
     final JBTextArea source = new JBTextArea();
     private final Tree tree = new Tree();
+    private final SearchTextField search = new SearchTextField(false);
+    private final JPanel searchRow = new JPanel(new BorderLayout(JBUI.scale(6), 0));
+    private final JBLabel searchStatus = new JBLabel();
     private final JBLabel status = new JBLabel(" ");
     private final JButton format = new JButton("Format");
     private final JButton minify = new JButton("Minify");
     private final JButton edit = new JButton("Edit Value…");
     private final Timer refresh = new Timer(250, event -> refreshTree());
+    private final Timer refreshSearch = new Timer(180, event -> updateSearch());
+    private final List<Object> searchHighlights = new ArrayList<>();
+    private List<JsonSourceSearch.Range> searchRanges = List.of();
+    private int activeMatch;
     private JsonDocument.Value parsed;
 
     JsonEditorPanel(Project project, String initialText) {
@@ -113,7 +142,28 @@ final class JsonEditorPanel extends JPanel implements Disposable {
                 append(entry.value.summary(), valueStyle);
             }
         });
-        tree.addTreeSelectionListener(event -> edit.setEnabled(parsed != null && tree.getSelectionPath() != null));
+        tree.addTreeSelectionListener(event -> updateActions());
+        // Replace the tree's generic export, which would use Entry.toString() for Swing copy.
+        tree.setTransferHandler(new TransferHandler() {
+            @Override
+            public int getSourceActions(JComponent component) {
+                return COPY;
+            }
+
+            @Override
+            protected Transferable createTransferable(JComponent component) {
+                return selectedKeyTransfer();
+            }
+        });
+        int menuModifier = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        DumbAwareAction.create("Copy Key", event -> copySelectedKey())
+            .registerCustomShortcutSet(editorShortcut(KeyEvent.VK_C, menuModifier), tree, this);
+        DumbAwareAction.create("Find in JSON", event -> showSearch())
+            .registerCustomShortcutSet(editorShortcut(KeyEvent.VK_F, menuModifier), this, this);
+        DumbAwareAction.create("Close JSON Search", event -> hideSearch())
+            .registerCustomShortcutSet(new CustomShortcutSet(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0)),
+                search.getTextEditor(), this);
+
 
         format.addActionListener(event -> applyFormat(true));
         minify.addActionListener(event -> applyFormat(false));
@@ -123,19 +173,44 @@ final class JsonEditorPanel extends JPanel implements Disposable {
         toolbar.add(minify);
         toolbar.add(edit);
 
+        search.getTextEditor().getEmptyText().setText("Search keys or values");
+        search.getTextEditor().getAccessibleContext().setAccessibleName("Search keys or values");
+        search.getTextEditor().addActionListener(event -> selectNextMatch());
+        searchRow.setVisible(false);
+        searchRow.setBorder(JBUI.Borders.empty(2, 4, 4, 4));
+        searchRow.add(search, BorderLayout.CENTER);
+        searchRow.add(searchStatus, BorderLayout.EAST);
+        var controls = new JPanel(new BorderLayout());
+        controls.add(toolbar, BorderLayout.NORTH);
+        controls.add(searchRow, BorderLayout.SOUTH);
+
         var split = new OnePixelSplitter(true, 0.46f);
         split.setFirstComponent(new JBScrollPane(source));
         split.setSecondComponent(new JBScrollPane(tree));
-        add(toolbar, BorderLayout.NORTH);
+        add(controls, BorderLayout.NORTH);
         add(split, BorderLayout.CENTER);
         add(status, BorderLayout.SOUTH);
 
         refresh.setRepeats(false);
+        refreshSearch.setRepeats(false);
+        search.addDocumentListener(new DocumentAdapter() {
+            @Override
+            protected void textChanged(@NotNull DocumentEvent event) {
+                if (search.getText().isEmpty()) {
+                    refreshSearch.stop();
+                    updateSearch();
+                } else {
+                    refreshSearch.restart();
+                }
+            }
+        });
         source.getDocument().addDocumentListener(new DocumentAdapter() {
             @Override
             protected void textChanged(@NotNull DocumentEvent event) {
                 parsed = null;
                 updateActions();
+                refreshSearch.stop();
+                clearSearchHighlights();
                 refresh.restart();
             }
         });
@@ -160,12 +235,122 @@ final class JsonEditorPanel extends JPanel implements Disposable {
         }
         tree.setModel(parsed == null ? null : new JsonTreeModel(parsed));
         updateActions();
+        refreshSearch.stop();
+        updateSearch();
     }
 
     private void updateActions() {
         format.setEnabled(parsed != null);
         minify.setEnabled(parsed != null);
-        edit.setEnabled(parsed != null && tree.getSelectionPath() != null);
+        var selected = selectedEntry();
+        edit.setEnabled(parsed != null && selected != null);
+    }
+
+    private JsonDocument.Entry selectedEntry() {
+        return tree.getLastSelectedPathComponent() instanceof JsonDocument.Entry entry ? entry : null;
+    }
+
+    private Transferable selectedKeyTransfer() {
+        var selected = selectedEntry();
+        return parsed != null && selected != null && selected.hasKey() ? new StringSelection(selected.name) : null;
+    }
+
+    private void copySelectedKey() {
+        var key = selectedKeyTransfer();
+        if (key != null) {
+            // Only an explicit copy puts the original key in the IDE clipboard and history.
+            CopyPasteManager.getInstance().setContents(key);
+            status.setText("Key copied");
+        }
+    }
+
+    private static CustomShortcutSet editorShortcut(int key, int menuModifier) {
+        var control = new KeyboardShortcut(KeyStroke.getKeyStroke(key, InputEvent.CTRL_DOWN_MASK), null);
+        if (menuModifier == InputEvent.CTRL_DOWN_MASK) {
+            return new CustomShortcutSet(control);
+        }
+        return new CustomShortcutSet(control, new KeyboardShortcut(KeyStroke.getKeyStroke(key, menuModifier), null));
+    }
+
+    private void showSearch() {
+        searchRow.setVisible(true);
+        search.getTextEditor().requestFocusInWindow();
+        search.getTextEditor().selectAll();
+        updateSearch();
+    }
+
+    private void hideSearch() {
+        searchRow.setVisible(false);
+        refreshSearch.stop();
+        search.setText("");
+        clearSearchHighlights();
+        source.requestFocusInWindow();
+    }
+
+    private void clearSearchHighlights() {
+        source.getHighlighter().removeAllHighlights();
+        searchHighlights.clear();
+        searchRanges = List.of();
+        activeMatch = 0;
+        searchStatus.setText("");
+    }
+
+    private void updateSearch() {
+        refreshSearch.stop();
+        clearSearchHighlights();
+        String query = search.getText();
+        if (!searchRow.isVisible() || parsed == null || query.isEmpty()) {
+            return;
+        }
+        searchRanges = JsonSourceSearch.find(source.getText(), query);
+        if (searchRanges.isEmpty()) {
+            searchStatus.setText("0 matches");
+            return;
+        }
+        try {
+            for (int index = 0; index < searchRanges.size(); index++) {
+                searchHighlights.add(addSearchHighlight(index));
+            }
+            revealActiveMatch();
+        } catch (BadLocationException error) {
+            clearSearchHighlights();
+            LOG.warn("Search offsets did not match the JSON source document.", error);
+        }
+    }
+
+    private void selectNextMatch() {
+        if (refreshSearch.isRunning()) {
+            updateSearch();
+        }
+        if (searchRanges.size() < 2) {
+            return;
+        }
+        int previous = activeMatch;
+        activeMatch = (activeMatch + 1) % searchRanges.size();
+        try {
+            for (int index : new int[]{previous, activeMatch}) {
+                Object replacement = addSearchHighlight(index);
+                source.getHighlighter().removeHighlight(searchHighlights.set(index, replacement));
+            }
+            revealActiveMatch();
+        } catch (BadLocationException error) {
+            clearSearchHighlights();
+            LOG.warn("Could not select the next JSON search match.", error);
+        }
+    }
+
+    private Object addSearchHighlight(int index) throws BadLocationException {
+        var range = searchRanges.get(index);
+        var painter = index == activeMatch ? ACTIVE_MATCH_PAINTER : MATCH_PAINTER;
+        return source.getHighlighter().addHighlight(range.start(), range.end(), painter);
+    }
+
+    private void revealActiveMatch() throws BadLocationException {
+        var rectangle = source.modelToView2D(searchRanges.get(activeMatch).start());
+        if (rectangle != null) {
+            source.scrollRectToVisible(rectangle.getBounds());
+        }
+        searchStatus.setText((activeMatch + 1) + " / " + searchRanges.size());
     }
 
     private void applyFormat(boolean pretty) {
@@ -218,6 +403,7 @@ final class JsonEditorPanel extends JPanel implements Disposable {
     @Override
     public void dispose() {
         refresh.stop();
+        refreshSearch.stop();
     }
 
     private static final class ValueDialog extends DialogWrapper {

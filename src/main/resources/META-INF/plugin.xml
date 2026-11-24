@@ -2,7 +2,7 @@
     <id>io.github.jsonhandle.studio</id>
     <name>JSON Handle</name>
     <vendor>JSON Handle</vendor>
-    <version>0.1.3</version>
+    <version>0.1.4</version>
     <idea-version since-build="261" until-build="261.*"/>
     <depends>com.intellij.modules.platform</depends>
     <description><![CDATA[
