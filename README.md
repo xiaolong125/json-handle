@@ -4,7 +4,7 @@
 
 ## 安装
 
-支持 Android Studio 2026.1.x（IDE 构建号 261）。在 **Settings → Plugins → ⚙ → Install Plugin from Disk…** 选择 `build/distributions/json-handle-0.1.1.zip`，按 IDE 提示重启。
+支持 Android Studio 2026.1.x（IDE 构建号 261）。在 **Settings → Plugins → ⚙ → Install Plugin from Disk…** 选择 `build/distributions/json-handle-0.1.3.zip`，按 IDE 提示重启。
 
 ## 使用
 
@@ -24,4 +24,4 @@
 gradle --offline buildPlugin
 ```
 
-安装包输出到 `build/distributions/json-handle-0.1.1.zip`。
+安装包输出到 `build/distributions/json-handle-0.1.3.zip`。

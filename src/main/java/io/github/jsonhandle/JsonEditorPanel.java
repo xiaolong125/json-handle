@@ -5,38 +5,51 @@ import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.editor.colors.EditorFontType;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.DialogWrapper;
+import com.intellij.ui.ColoredTreeCellRenderer;
 import com.intellij.ui.DocumentAdapter;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.OnePixelSplitter;
+import com.intellij.ui.SimpleTextAttributes;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.components.JBTextArea;
 import com.intellij.ui.treeStructure.Tree;
 import com.intellij.util.ui.JBUI;
+import com.intellij.util.ui.UIUtil;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JPanel;
+import javax.swing.JTree;
 import javax.swing.Timer;
+import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.TreeModelListener;
-import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.TreeModel;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 import java.awt.BorderLayout;
-import java.awt.Component;
 import java.awt.FlowLayout;
 import java.io.IOException;
 
 final class JsonEditorPanel extends JPanel implements Disposable {
-    private static final JBColor OBJECT_COLOR = new JBColor(0x2456A6, 0x81AFFF);
-    private static final JBColor ARRAY_COLOR = new JBColor(0x7B3EA7, 0xD4A0FA);
-    private static final JBColor STRING_COLOR = new JBColor(0x28743F, 0x91CD85);
-    private static final JBColor NUMBER_COLOR = new JBColor(0x007076, 0x75CBD0);
-    private static final JBColor BOOLEAN_COLOR = new JBColor(0x9B4900, 0xF5AD68);
-    private static final JBColor NULL_COLOR = new JBColor(0x626872, 0xA8AFBA);
+    private static final SimpleTextAttributes FIELD_NAME = new SimpleTextAttributes(
+        SimpleTextAttributes.STYLE_BOLD, new JBColor(0x44AA00, 0x91CD65));
+    private static final SimpleTextAttributes ARRAY_NAME = new SimpleTextAttributes(
+        SimpleTextAttributes.STYLE_BOLD, new JBColor(0xEF5C85, 0xFF83A6));
+    private static final SimpleTextAttributes ARRAY_INDEX = new SimpleTextAttributes(
+        SimpleTextAttributes.STYLE_PLAIN, new JBColor(0xFB8DC4, 0xF3A6D2));
+    private static final SimpleTextAttributes SEPARATOR = new SimpleTextAttributes(
+        SimpleTextAttributes.STYLE_PLAIN, new JBColor(0xBDBDBD, 0x92969E));
+    private static final SimpleTextAttributes STRING_VALUE = new SimpleTextAttributes(
+        SimpleTextAttributes.STYLE_PLAIN, new JBColor(0xFF6633, 0xFF926D));
+    private static final SimpleTextAttributes NUMBER_VALUE = new SimpleTextAttributes(
+        SimpleTextAttributes.STYLE_PLAIN, new JBColor(0xCC00FF, 0xE087FF));
+    private static final SimpleTextAttributes BOOLEAN_VALUE = new SimpleTextAttributes(
+        SimpleTextAttributes.STYLE_PLAIN, new JBColor(0x0099CC, 0x62C9F2));
+    private static final SimpleTextAttributes NULL_VALUE = new SimpleTextAttributes(
+        SimpleTextAttributes.STYLE_PLAIN, new JBColor(0xAAAA00, 0xD5D464));
 
     private final Project project;
     final JBTextArea source = new JBTextArea();
@@ -60,28 +73,44 @@ final class JsonEditorPanel extends JPanel implements Disposable {
         tree.setModel(null);
         tree.setLargeModel(true);
         tree.setRowHeight(JBUI.scale(22));
-        tree.setCellRenderer(new DefaultTreeCellRenderer() {
+        tree.setCellRenderer(new ColoredTreeCellRenderer() {
             @Override
-            public Component getTreeCellRendererComponent(javax.swing.JTree tree, Object value,
-                                                          boolean selected, boolean expanded, boolean leaf,
-                                                          int row, boolean focused) {
-                super.getTreeCellRendererComponent(tree, value, selected, expanded, leaf, row, focused);
-                putClientProperty("html.disable", true);
-                var entry = (JsonDocument.Entry) value;
-                String name = entry.name == null ? "$" : entry.name.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t");
-                setText(name + "  " + entry.value.summary());
-                // Let the IDE choose the foreground against its selection highlight.
-                if (!selected) {
-                    setForeground(switch (entry.value.kind()) {
-                        case OBJECT -> OBJECT_COLOR;
-                        case ARRAY -> ARRAY_COLOR;
-                        case STRING -> STRING_COLOR;
-                        case NUMBER -> NUMBER_COLOR;
-                        case BOOLEAN -> BOOLEAN_COLOR;
-                        case NULL -> NULL_COLOR;
-                    });
+            public void customizeCellRenderer(@NotNull JTree tree, Object value, boolean selected,
+                                              boolean expanded, boolean leaf, int row, boolean focused) {
+                if (!(value instanceof JsonDocument.Entry entry)) {
+                    return;
                 }
-                return this;
+                String name = entry.name == null ? "$" : entry.name.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t");
+                setIcon(UIManager.getIcon(leaf ? "Tree.leafIcon" : expanded ? "Tree.openIcon" : "Tree.closedIcon"));
+                var kind = entry.value.kind();
+                var nameStyle = switch (kind) {
+                    case OBJECT -> SimpleTextAttributes.REGULAR_ATTRIBUTES;
+                    case ARRAY -> ARRAY_NAME;
+                    case STRING, NUMBER, BOOLEAN, NULL -> FIELD_NAME;
+                };
+                if (entry.name == null) {
+                    nameStyle = SimpleTextAttributes.REGULAR_ATTRIBUTES;
+                } else if (entry.arrayItem) {
+                    nameStyle = ARRAY_INDEX;
+                }
+                var valueStyle = switch (kind) {
+                    case OBJECT, ARRAY -> SimpleTextAttributes.REGULAR_ATTRIBUTES;
+                    case STRING -> STRING_VALUE;
+                    case NUMBER -> NUMBER_VALUE;
+                    case BOOLEAN -> BOOLEAN_VALUE;
+                    case NULL -> NULL_VALUE;
+                };
+                var separatorStyle = SEPARATOR;
+                // Use the IDE's selection foreground for every fragment against the selection highlight.
+                if (selected) {
+                    var foreground = UIUtil.getTreeSelectionForeground(focused);
+                    nameStyle = new SimpleTextAttributes(nameStyle.getStyle(), foreground);
+                    valueStyle = new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, foreground);
+                    separatorStyle = valueStyle;
+                }
+                append(name, nameStyle);
+                append(": ", separatorStyle);
+                append(entry.value.summary(), valueStyle);
             }
         });
         tree.addTreeSelectionListener(event -> edit.setEnabled(parsed != null && tree.getSelectionPath() != null));
@@ -169,7 +198,7 @@ final class JsonEditorPanel extends JPanel implements Disposable {
         var parent = (JsonDocument.Entry) parentPath.getLastPathComponent();
         var siblings = parent.value.children();
         int index = siblings.indexOf(current);
-        siblings.set(index, new JsonDocument.Entry(current.name, dialog.replacement));
+        siblings.set(index, new JsonDocument.Entry(current.name, dialog.replacement, current.arrayItem));
         String text;
         try {
             text = JsonDocument.render(parsed, true);
@@ -236,7 +265,7 @@ final class JsonEditorPanel extends JPanel implements Disposable {
         private final JsonDocument.Entry root;
 
         JsonTreeModel(JsonDocument.Value value) {
-            root = new JsonDocument.Entry(null, value);
+            root = new JsonDocument.Entry(null, value, false);
         }
 
         @Override

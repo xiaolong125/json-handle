@@ -23,9 +23,12 @@ final class JsonDocument {
         final String name;
         final Value value;
 
-        Entry(String name, Value value) {
+        final boolean arrayItem;
+
+        Entry(String name, Value value, boolean arrayItem) {
             this.name = name;
             this.value = value;
+            this.arrayItem = arrayItem;
         }
     }
 
@@ -61,7 +64,7 @@ final class JsonDocument {
                 reader.beginObject();
                 var members = new ArrayList<Entry>();
                 while (reader.hasNext()) {
-                    members.add(new Entry(reader.nextName(), readValue(reader)));
+                    members.add(new Entry(reader.nextName(), readValue(reader), false));
                 }
                 reader.endObject();
                 yield new Value(Kind.OBJECT, null, members);
@@ -70,7 +73,7 @@ final class JsonDocument {
                 reader.beginArray();
                 var items = new ArrayList<Entry>();
                 while (reader.hasNext()) {
-                    items.add(new Entry(Integer.toString(items.size()), readValue(reader)));
+                    items.add(new Entry(Integer.toString(items.size()), readValue(reader), true));
                 }
                 reader.endArray();
                 yield new Value(Kind.ARRAY, null, items);
